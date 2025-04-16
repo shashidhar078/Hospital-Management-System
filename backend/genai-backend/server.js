@@ -58,6 +58,7 @@ Format:
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = response.text();
+    console.log("🧠 Gemini raw output:", text);
 
     // Clean JSON if it has ``` markers
     const cleanJson = text.replace(/```(json)?/g, '').trim();
@@ -120,6 +121,6 @@ app.get('/api/health', (req, res) => {
 
 // Start the server
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-    console.log(`🚀 Server running at http://localhost:${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+    console.log(`🚀 Server running at http://0.0.0.0:${PORT}`);
 });

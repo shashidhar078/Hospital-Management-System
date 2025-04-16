@@ -10,6 +10,7 @@ import DoctorLogin from './pages/auth/DoctorLogin';
 import DoctorRegister from './pages/auth/DoctorRegister';
 import "./index.css";
 import GenAiSearch from './genai/GenAiSearch';
+import Home from './App';
 
 
 
@@ -24,6 +25,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
         <Route path="/doctor/login" element={<DoctorLogin />} />
         <Route path="/doctor/register" element={<DoctorRegister />} />
         <Route path="/search/:query" element={<GenAiSearch />} />
+        
       </Routes>
     </BrowserRouter>
   </React.StrictMode>

@@ -1,13 +1,14 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import './App.css';
 import logo from './hospitallogo.png';
 import backgroundVideo from './backgroundvideo.mp4';
-import { FiUpload, FiSearch, FiUser } from 'react-icons/fi';
+import { FiUpload, FiSearch } from 'react-icons/fi';
 import { useNavigate } from 'react-router-dom';
 
 function App() {
   const [activeNav, setActiveNav] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const fileInputRef = useRef(null);
   const navigate = useNavigate();
 
   const leftNavItems = [
@@ -24,12 +25,45 @@ function App() {
     if (id === 'doctors') {
       navigate('/select-role');
     }
-    // you can add more logic for 'patients' or others if needed
+    // Add more routes as needed
   };
 
   const handleSearch = (e) => {
     if (e.key === "Enter" && searchQuery.trim()) {
       navigate(`/search/${searchQuery.trim()}`);
+    }
+  };
+
+  const handleUploadClick = () => {
+    fileInputRef.current.click();
+  };
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file || file.type !== "application/pdf") {
+      alert("Please upload a valid PDF file.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("pdf", file);
+
+    try {
+      const response = await fetch("http://localhost:3001/api/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await response.json();
+
+      if (data.medicines && data.medicines.length > 0) {
+        navigate(`/search/${data.medicines[0].medicine}`);
+      } else {
+        alert("No medicine names found in the PDF.");
+      }
+    } catch (err) {
+      console.error("Upload failed:", err);
+      alert("Failed to upload file.");
     }
   };
 
@@ -80,12 +114,16 @@ function App() {
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleSearch}
             />
-            <button className="action-btn">
+            <button className="action-btn" onClick={handleUploadClick}>
               <FiUpload className="action-icon" />
             </button>
-            <button className="action-btn">
-              <FiUser className="action-icon" />
-            </button>
+            <input
+              type="file"
+              accept="application/pdf"
+              ref={fileInputRef}
+              onChange={handleFileUpload}
+              style={{ display: "none" }}
+            />
           </div>
         </div>
       </div>
