@@ -1,256 +1,125 @@
-const express = require('express');
 const dotenv = require('dotenv');
+const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const pdfParse = require('pdf-parse');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-// Enhanced configuration
+// Load environment variables
 dotenv.config();
 const app = express();
 
-// Improved CORS setup
+// CORS setup
 app.use(cors({
-    origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-    credentials: true,
-    maxAge: 86400
+    origin: '*',
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type']
 }));
 
-// Better body parsing
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Secure file upload configuration
+// Multer setup for PDF upload
 const storage = multer.memoryStorage();
-const upload = multer({
-    storage,
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
-    fileFilter: (req, file, cb) => {
-        if (file.mimetype === 'application/pdf') {
-            cb(null, true);
-        } else {
-            cb(new Error('Invalid file type'), false);
-        }
-    }
-});
+const upload = multer({ storage });
 
-// Gemini AI with enhanced configuration
+// Google Gemini setup
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ 
-    model: "gemini-pro",
-    generationConfig: {
-        temperature: 0.5,
-        maxOutputTokens: 2000
-    }
-});
+const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
-// Enhanced medicine extraction
+// Function to extract medicine names from text
 const extractDrugsFromText = (text) => {
-    // Improved regex patterns
-    const medicinePatterns = [
-        /(?:\b|\d\s+)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b(?!\s*(?:mg|ml|tablet|capsule)\b)/g,
-        /\b([A-Z][a-z]+\s*(?:\d+[A-Za-z]*)*)\b/g,
-        /(?:\b|\d\s+)([A-Z][a-z]+(?:mycin|cillin|pril|zole|dipine|olol|oxetine))\b/g
-    ];
-
-    const medicines = [];
-    medicinePatterns.forEach(pattern => {
-        const matches = text.match(pattern) || [];
-        matches.forEach(match => medicines.push(match.trim()));
-    });
-
-    const commonWords = ['Take', 'Before', 'After', 'Meal', 'Tablet', 'Capsule', 'Morning', 'Night'];
-    const dosagePattern = /([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s*(\d+\s*(?:mg|ml|g|mcg|IU)\b)/gi;
-    const dosages = [];
-    let dosageMatch;
-
-    while ((dosageMatch = dosagePattern.exec(text)) !== null) {
-        dosages.push({
-            medicine: dosageMatch[1],
-            dosage: dosageMatch[2]
-        });
-    }
-
-    return {
-        medicines: [...new Set(medicines)]
-            .filter(med => med.length > 3 && !commonWords.includes(med)),
-        dosages
-    };
+    const regex = /\b([A-Z][a-z]+(?:mycin|cillin|pril|zole|dipine|olol|caine|sartan|mab|nib)?)\b/g;
+    const matches = text.match(regex) || [];
+    const uniqueMatches = [...new Set(matches)];
+    return uniqueMatches;
 };
 
-// Enhanced drug details fetching
+// Function to call Gemini AI with prompt
 const fetchDrugDetails = async (medicines) => {
-    const results = [];
-    const batchSize = 5; // Process 5 medicines at a time
-    const batches = [];
+    const prompt = `
+You are a medical assistant. Provide details in JSON format for the following medicines:
+${medicines.join(', ')}
 
-    for (let i = 0; i < medicines.length; i += batchSize) {
-        batches.push(medicines.slice(i, i + batchSize));
-    }
+Format:
+[
+  {
+    "medicine": "Paracetamol",
+    "drugNames": ["Tylenol", "Panadol"],
+    "sideEffects": ["Nausea", "Rash"],
+    "remedies": ["Drink water", "Use antihistamines"],
+    "description": "Used to treat pain and fever.",
+    "precautions": ["Avoid alcohol", "Check liver health"]
+  },
+  ...
+]
+`;
 
-    for (const batch of batches) {
-        try {
-            const prompt = `Provide details for these medicines: ${batch.join(', ')}. 
-            Return a JSON array where each item has:
-            - medicine: (string)
-            - drugNames: [array]
-            - sideEffects: [array]
-            - remedies: [array]
-            - description: (string)
-            - precautions: [array]`;
-            
-            const result = await model.generateContent(prompt);
-            const response = await result.response;
-            const text = response.text();
-            const data = JSON.parse(text);
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
 
-            results.push(...data);
-        } catch (error) {
-            batch.forEach(medicine => {
-                results.push({
-                    medicine,
-                    error: 'Failed to fetch details',
-                    details: process.env.NODE_ENV === 'development' ? error.message : undefined
-                });
-            });
-        }
-    }
-
-    return results;
+    // Clean JSON if it has ``` markers
+    const cleanJson = text.replace(/```(json)?/g, '').trim();
+    return JSON.parse(cleanJson);
 };
 
-// Enhanced upload endpoint
+// Route: Upload PDF and analyze
 app.post('/api/upload', upload.single('pdf'), async (req, res) => {
     try {
         if (!req.file) {
-            return res.status(400).json({ 
-                success: false,
-                error: 'NO_FILE',
-                message: 'No PDF file uploaded',
-                acceptedTypes: ['application/pdf']
-            });
+            return res.status(400).json({ error: 'PDF file is required' });
         }
 
-        const startTime = Date.now();
         const data = await pdfParse(req.file.buffer);
-        const extractionResult = extractDrugsFromText(data.text);
-        
-        if (extractionResult.medicines.length === 0) {
-            return res.status(404).json({ 
-                success: false,
-                error: 'NO_MEDICINES',
-                message: 'No medicines detected in the prescription',
-                extractedText: data.text.substring(0, 200) + '...'
-            });
+        const medicines = extractDrugsFromText(data.text);
+
+        if (medicines.length === 0) {
+            return res.status(404).json({ message: 'No medicine names found' });
         }
 
-        const drugDetails = await fetchDrugDetails(extractionResult.medicines);
-        
-        // Merge dosage information
-        drugDetails.forEach(drug => {
-            const dosageInfo = extractionResult.dosages.find(d => 
-                d.medicine.toLowerCase() === drug.medicine.toLowerCase()
-            );
-            if (dosageInfo) drug.dosage = dosageInfo.dosage;
-        });
+        const drugDetails = await fetchDrugDetails(medicines);
+        res.json({ medicines: drugDetails });
 
-        res.status(200).json({
-            success: true,
-            processingTime: `${(Date.now() - startTime)/1000}s`,
-            fileInfo: {
-                name: req.file.originalname,
-                size: req.file.size,
-                pages: data.numpages
-            },
-            medicines: drugDetails,
-            warnings: drugDetails.filter(d => d.error)
-        });
-
-    } catch (error) {
-        console.error('Upload Error:', error);
-        res.status(500).json({
-            success: false,
-            error: 'PROCESSING_ERROR',
-            message: 'Failed to process PDF',
-            details: process.env.NODE_ENV === 'development' ? error.message : undefined
-        });
+    } catch (err) {
+        console.error('Upload error:', err);
+        res.status(500).json({ error: 'Failed to process the file or fetch drug info', message: err.message });
     }
 });
 
-// Enhanced search endpoint
+// Route: Search by medicine name(s)
 app.post('/api/search', async (req, res) => {
     try {
         let { medicines } = req.body;
-        
+
         if (!medicines) {
-            return res.status(400).json({ 
-                success: false,
-                error: 'MISSING_INPUT',
-                message: 'Medicine names are required',
-                example: { medicines: ["Paracetamol", "Ibuprofen"] }
-            });
+            return res.status(400).json({ error: 'Please provide medicine name(s)' });
         }
 
-        const medicinesArray = Array.isArray(medicines) ? medicines : [medicines];
-        const drugDetails = await fetchDrugDetails(medicinesArray);
-        
-        res.status(200).json({
-            success: true,
-            count: drugDetails.length,
-            results: drugDetails,
-            warnings: drugDetails.filter(d => d.error)
-        });
+        if (!Array.isArray(medicines)) {
+            medicines = [medicines];
+        }
 
-    } catch (error) {
-        console.error('Search Error:', error);
-        res.status(500).json({ 
-            success: false,
-            error: 'SEARCH_ERROR',
-            message: 'Failed to search medicines',
-            details: process.env.NODE_ENV === 'development' ? error.message : undefined
-        });
+        const drugDetails = await fetchDrugDetails(medicines);
+        res.json({ medicines: drugDetails });
+
+    } catch (err) {
+        console.error('Search error:', err);
+        res.status(500).json({ error: 'Failed to fetch drug info', message: err.message });
     }
 });
 
-// Health check endpoint
+// Health check
 app.get('/api/health', (req, res) => {
-    res.status(200).json({
-        status: 'OK',
-        timestamp: new Date().toISOString(),
-        version: '1.1.0',
+    res.json({
+        status: 'ok',
         environment: process.env.NODE_ENV || 'development',
-        uptime: process.uptime()
+        timestamp: new Date().toISOString()
     });
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-    console.error('Server Error:', err);
-    res.status(500).json({
-        success: false,
-        error: 'SERVER_ERROR',
-        message: 'Internal Server Error',
-        details: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
-});
-
-// Start server
+// Start the server
 const PORT = process.env.PORT || 3001;
-const server = app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log('Available Endpoints:');
-    console.log(`- POST http://localhost:${PORT}/api/upload`);
-    console.log(`- POST http://localhost:${PORT}/api/search`);
-    console.log(`- GET  http://localhost:${PORT}/api/health`);
-});
-
-// Handle shutdown gracefully
-process.on('SIGTERM', () => {
-    console.log('SIGTERM received. Shutting down gracefully...');
-    server.close(() => {
-        console.log('Server terminated');
-        process.exit(0);
-    });
+app.listen(PORT, () => {
+    console.log(`🚀 Server running at http://localhost:${PORT}`);
 });
